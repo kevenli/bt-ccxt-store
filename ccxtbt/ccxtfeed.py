@@ -43,7 +43,7 @@ class MetaCCXTFeed(DataBase.__class__):
         CCXTStore.DataCls = cls
 
 
-class CCXTFeed(DataBase):
+class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
     """
     CryptoCurrency eXchange Trading Library Data Feed.
     Params:
