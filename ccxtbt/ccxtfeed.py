@@ -84,8 +84,8 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
         # self.store = CCXTStore(exchange, config, retries)
         self.store = self._store(**kwargs)
         self._data = deque()  # data queue for price data
-        self._last_id = ''  # last processed trade id for ohlcv
-        self._last_ts = 0  # last processed timestamp for ohlcv
+        self._last_id = None  # last processed trade id for ohlcv
+        self._last_ts = None  # last processed timestamp for ohlcv
 
     def start(self, ):
         DataBase.start(self)
@@ -136,7 +136,12 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
 
         if fromdate:
             since = int((fromdate - datetime(1970, 1, 1)).total_seconds() * 1000)
+            self._last_ts = 0
         else:
+            if self._last_ts is None:
+                self._last_ts = self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity,
+                                                       since=None, limit=1, params=self.p.fetch_ohlcv_params)[-1][0]
+                
             if self._last_ts > 0:
                 since = self._last_ts
             else:
@@ -201,7 +206,8 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
     def _load_ticks(self):
         if self._last_id is None:
             # first time get the latest trade only
-            trades = [self.store.fetch_trades(self.p.dataname)[-1]]
+            self._last_id = self.store.fetch_trades(self.p.dataname)[-1]['id']
+            trades = []
         else:
             trades = self.store.fetch_trades(self.p.dataname)
 
