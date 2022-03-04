@@ -103,16 +103,20 @@ class CCXTStore(with_metaclass(MetaSingleton, object)):
         self.retries = retries
         self.debug = debug
         balance = self.exchange.fetch_balance() if 'secret' in config else 0
-
-        if balance == 0 or not balance['free'][currency]:
+        try:
+            if balance == 0 or not balance['free'][currency]:
+                self._cash = 0
+            else:
+                self._cash = balance['free'][currency]
+        except KeyError:  # never funded or eg. all USD exchanged 
             self._cash = 0
-        else:
-            self._cash = balance['free'][currency]
-
-        if balance == 0 or not balance['total'][currency]:
+        try:
+            if balance == 0 or not balance['total'][currency]:
+                self._value = 0
+            else:
+                self._value = balance['total'][currency]
+        except KeyError:
             self._value = 0
-        else:
-            self._value = balance['total'][currency]
 
     def get_granularity(self, timeframe, compression):
         if not self.exchange.has['fetchOHLCV']:
@@ -191,8 +195,11 @@ class CCXTStore(with_metaclass(MetaSingleton, object)):
         return self.exchange.fetch_order(oid, symbol)
 
     @retry
-    def fetch_open_orders(self):
-        return self.exchange.fetchOpenOrders()
+    def fetch_open_orders(self, symbol=None):
+        if symbol == None:
+            return self.exchange.fetchOpenOrders()
+        else:
+            return self.exchange.fetchOpenOrders(symbol)
 
     @retry
     def private_end_point(self, type, endpoint, params):

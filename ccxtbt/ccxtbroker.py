@@ -139,6 +139,8 @@ class CCXTBroker(with_metaclass(MetaCCXTBroker, BrokerBase)):
         self.startingcash = self.store._cash
         self.startingvalue = self.store._value
 
+        self.use_order_params = True
+
     def get_balance(self):
         self.store.get_balance()
         self.cash = self.store._cash
@@ -147,8 +149,14 @@ class CCXTBroker(with_metaclass(MetaCCXTBroker, BrokerBase)):
 
     def get_wallet_balance(self, currency, params={}):
         balance = self.store.get_wallet_balance(currency, params=params)
-        cash = balance['free'][currency] if balance['free'][currency] else 0
-        value = balance['total'][currency] if balance['total'][currency] else 0
+        try:
+            cash = balance['free'][currency] if balance['free'][currency] else 0
+        except KeyError:  # never funded or eg. all USD exchanged
+            cash = 0
+        try:
+            value = balance['total'][currency] if balance['total'][currency] else 0
+        except KeyError:  # never funded or eg. all USD exchanged
+            value = 0
         return cash, value
 
     def getcash(self):
@@ -182,7 +190,7 @@ class CCXTBroker(with_metaclass(MetaCCXTBroker, BrokerBase)):
     def next(self):
         if self.debug:
             print('Broker next() called')
-        
+
         for o_order in list(self.open_orders):
             oID = o_order.ccxt_order['id']
 
@@ -193,14 +201,14 @@ class CCXTBroker(with_metaclass(MetaCCXTBroker, BrokerBase)):
 
             # Get the order
             ccxt_order = self.store.fetch_order(oID, o_order.data.p.dataname)
-            
+
             # Check for new fills
-            if 'trades' in ccxt_order:
+            if 'trades' in ccxt_order and ccxt_order['trades'] is not None:
                 for fill in ccxt_order['trades']:
                     if fill not in o_order.executed_fills:
-                        o_order.execute(fill['datetime'], fill['amount'], fill['price'], 
-                                        0, 0.0, 0.0, 
-                                        0, 0.0, 0.0, 
+                        o_order.execute(fill['datetime'], fill['amount'], fill['price'],
+                                        0, 0.0, 0.0,
+                                        0, 0.0, 0.0,
                                         0.0, 0.0,
                                         0, 0.0)
                         o_order.executed_fills.append(fill['id'])
@@ -219,14 +227,34 @@ class CCXTBroker(with_metaclass(MetaCCXTBroker, BrokerBase)):
                 self.open_orders.remove(o_order)
                 self.get_balance()
 
+            # Manage case when an order is being Canceled from the Exchange
+            #  from https://github.com/juancols/bt-ccxt-store/
+            if ccxt_order[self.mappings['canceled_order']['key']] == self.mappings['canceled_order']['value']:
+                self.open_orders.remove(o_order)
+                o_order.cancel()
+                self.notify(o_order)
+
     def _submit(self, owner, data, exectype, side, amount, price, params):
+        if amount == 0 or price == 0:
+        # do not allow failing orders
+            return None
         order_type = self.order_types.get(exectype) if exectype else 'market'
         created = int(data.datetime.datetime(0).timestamp()*1000)
         # Extract CCXT specific params if passed to the order
         params = params['params'] if 'params' in params else params
-        params['created'] = created  # Add timestamp of order creation for backtesting
-        ret_ord = self.store.create_order(symbol=data.p.dataname, order_type=order_type, side=side,
-                                          amount=amount, price=price, params=params)
+        if not self.use_order_params:
+            ret_ord = self.store.create_order(symbol=data.p.dataname, order_type=order_type, side=side,
+                                              amount=amount, price=price, params={})
+        else:
+            try:
+                # all params are exchange specific: https://github.com/ccxt/ccxt/wiki/Manual#custom-order-params
+                params['created'] = created  # Add timestamp of order creation for backtesting
+                ret_ord = self.store.create_order(symbol=data.p.dataname, order_type=order_type, side=side,
+                                                  amount=amount, price=price, params=params)
+            except:
+                # save some API calls after failure
+                self.use_order_params = False
+                return None
 
         _order = self.store.fetch_order(ret_ord['id'], data.p.dataname)
 
@@ -287,7 +315,7 @@ class CCXTBroker(with_metaclass(MetaCCXTBroker, BrokerBase)):
     def get_orders_open(self, safe=False):
         return self.store.fetch_open_orders()
 
-    def private_end_point(self, type, endpoint, params):
+    def private_end_point(self, type, endpoint, params, prefix = ""):
         '''
         Open method to allow calls to be made to any private end point.
         See here: https://github.com/ccxt/ccxt/wiki/Manual#implicit-api-methods
@@ -297,6 +325,8 @@ class CCXTBroker(with_metaclass(MetaCCXTBroker, BrokerBase)):
         - Params: Dict: An implicit method takes a dictionary of parameters, sends
           the request to the exchange and returns an exchange-specific JSON
           result from the API as is, unparsed.
+        - Optional prefix to be appended to the front of method_str should your
+          exchange needs it. E.g. v2_private_xxx
 
         To get a list of all available methods with an exchange instance,
         including implicit methods and unified methods you can simply do the
@@ -308,6 +338,9 @@ class CCXTBroker(with_metaclass(MetaCCXTBroker, BrokerBase)):
         endpoint_str = endpoint_str.replace('{', '')
         endpoint_str = endpoint_str.replace('}', '')
 
-        method_str = 'private_' + type.lower() + endpoint_str.lower()
+        if prefix != "":
+            method_str = prefix.lower() + '_private_' + type.lower() + endpoint_str.lower()
+        else:
+            method_str = 'private_' + type.lower() + endpoint_str.lower()
 
         return self.store.private_end_point(type=type, endpoint=method_str, params=params)
